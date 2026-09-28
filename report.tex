@@ -389,9 +389,9 @@ The novelty of the work lies in its integration of capabilities that the surveye
 
 AutoVue is developed to provide a proactive, data-driven approach to vehicle diagnostics and maintenance management. Modern vehicles are equipped with On-Board Diagnostics II (OBD-II) systems that generate continuous streams of operational data related to engine performance, emissions, and overall vehicle health. While conventional diagnostic tools primarily detect faults after they occur, this project transforms raw vehicle data into intelligent insights capable of flagging abnormal behaviour before it becomes critical. By integrating real-time OBD-II telemetry with machine learning inference and a native Android cockpit, the system enhances reliability, safety, and maintenance efficiency. \par
 
-The system collects essential vehicle parameters — engine RPM, vehicle speed, coolant temperature, intake air temperature, manifold absolute pressure, mass air flow, throttle position, ambient temperature, and accelerator pedal positions — from recorded OBD-II driving datasets replayed in real time by the integrated simulator. These parameters are processed by a driver behaviour classifier, a health anomaly detector, and a physics-based fuel estimator to identify irregular patterns and quantify consumption. The results are presented through a high-performance Android application that displays live instrumentation, machine-learning insights, GPS trip mapping, and diagnostic trouble code (DTC) management in a clear, driver-friendly format. \par
+The system collects essential vehicle parameters — engine RPM, vehicle speed, coolant temperature, intake air temperature, manifold absolute pressure, mass air flow, throttle position, ambient temperature, and accelerator pedal positions — acquired in real time directly from the vehicle's Engine Control Unit (ECU) via a Bluetooth OBD-II adapter. These parameters are processed by a driver behaviour classifier, a health anomaly detector, and a physics-based fuel estimator to identify irregular patterns and quantify consumption. The results are presented through a high-performance Android application that displays live instrumentation, machine-learning insights, GPS trip mapping, and diagnostic trouble code (DTC) management in a clear, driver-friendly format. \par
 
-This Software Requirements Specification (SRS) document defines the functional and non-functional requirements of the system as implemented. It establishes system boundaries, operational constraints, and user interaction guidelines. The system is implemented as a prototype focused on passenger vehicles supporting standard OBD-II PIDs, operating in a non-intrusive read-only mode, and validated through a dataset-driven simulator that stands in for a physical vehicle connection. The overall objective is to reduce unexpected breakdowns, minimize repair costs, extend vehicle lifespan, and contribute to intelligent transportation and smart mobility solutions.
+This Software Requirements Specification (SRS) document defines the functional and non-functional requirements of the system as implemented. It establishes system boundaries, operational constraints, and user interaction guidelines. The system is implemented as a prototype focused on passenger vehicles supporting standard OBD-II PIDs, operating in a non-intrusive read-only mode, and validated through live acquisition from the vehicle's OBD-II port using an ELM327-compatible Bluetooth adapter. The overall objective is to reduce unexpected breakdowns, minimize repair costs, extend vehicle lifespan, and contribute to intelligent transportation and smart mobility solutions.
 
 \section{Functional requirements}
 This section specifies the functional requirements of AutoVue. The requirements are derived from the identified research gaps in the surveyed literature and the implemented capabilities of the platform. Each requirement is described in terms of input, processing, and output.
@@ -399,8 +399,8 @@ This section specifies the functional requirements of AutoVue. The requirements 
 \subsection{Real-Time OBD-II Telemetry Streaming}
 The system shall stream live OBD-II parameter values to connected clients in real time. Streaming shall be provided over a secure WebSocket channel (\texttt{/api/ws/live}), with an automatic REST polling fallback to a latest-snapshot endpoint (\texttt{/api/live-data}). At minimum, the streamed parameters shall include vehicle speed (VSS), engine RPM, throttle position, engine coolant temperature, intake air temperature, calculated engine load, barometric/ambient temperature, manifold absolute pressure (MAP), and mass air flow (MAF). The system shall also display the active OBD-II protocol and the measured telemetry throughput rate. \par
 
-\subsection{OBD-II Dataset Simulation and Playback Control}
-The system shall include an integrated simulator that plays back recorded OBD-II datasets (CSV/XLSX) row by row in real time, so that the full platform can be developed, tested, and demonstrated without a physical vehicle. The system shall provide playback control endpoints to start, pause, resume, stop, and reset playback; to adjust playback speed (0.5x, 1x, 2x, 5x, 10x); to toggle dataset looping; and to report playback status including current row, total rows, elapsed time, and completion percentage. The system shall support listing, uploading, renaming, deleting, and switching between datasets, and shall load a bundled sample dataset automatically at startup. \par
+\subsection{OBD-II Adapter Connection and Acquisition Control}
+The system shall discover, pair with, and connect to an ELM327-compatible Bluetooth OBD-II adapter installed in the vehicle's diagnostic port. The system shall auto-detect the active OBD-II protocol (e.g. ISO 15765-4 CAN) upon connection, and shall provide control endpoints to initiate, pause, resume, and terminate a live acquisition session. The system shall report live connection status including adapter connection state, active protocol, session duration, and current telemetry throughput rate, and shall attempt automatic reconnection on an unexpected adapter disconnection. \par
 
 \subsection{Machine Learning Inference on Live Telemetry}
 The system shall execute three machine learning models automatically on a rolling buffer of the most recent telemetry ticks, and shall attach inference results to every streamed tick under an \texttt{ml} key. \par
@@ -409,16 +409,13 @@ The system shall execute three machine learning models automatically on a rollin
   \item \textbf{Vehicle health anomaly detection:} an LSTM Autoencoder shall evaluate the most recent 24 ticks across ten sensor features (active from tick 24), returning an anomaly flag, an anomaly score, per-feature reconstruction errors, and the list of triggered features whose errors exceed their individual thresholds.
   \item \textbf{Fuel consumption estimation:} a three-tier physics engine shall compute the fuel consumption rate (g/s) and instantaneous mileage (km/L) from the most recent 20 ticks (active from tick 20), using a MAF-based method as Tier 1, a speed-density calculation using MAP and RPM as Tier 2, and a throttle heuristic as Tier 3, with the engine-off case handled as Tier 0.
 \end{itemize}
-The same inference capabilities shall also be exposed as standalone REST endpoints (\texttt{/api/driver/predict}, \texttt{/api/health/predict}, \texttt{/api/fuel/predict}) so that the models can be exercised independently of the simulator. \par
-
-\subsection{Sensor Override Dials}
-The system shall allow any of the ten standard sensor fields to be overridden with a fixed value while playback continues in the background. Overrides shall be applied at tick-build time and released individually or all at once, after which the affected fields immediately resume reading from the dataset. Each broadcast tick shall expose the effective values, the raw dataset values, and the list of currently overridden fields, so that frontends can keep chart history honest and restore live tracking when a dial is released. \par
+The same inference capabilities shall also be exposed as standalone REST endpoints (\texttt{/api/driver/predict}, \texttt{/api/health/predict}, \texttt{/api/fuel/predict}) so that the models can be exercised independently of the live stream. \par
 
 \subsection{Diagnostic Trouble Code (DTC) Management}
 The system shall support injection of OBD-II Diagnostic Trouble Codes into the live stream through REST endpoints: listing active codes, replacing the active code list (auto-uppercased), clearing all codes, and removing a specific code. Codes spanning the powertrain (P), chassis (C), body (B), and network (U) domains shall be supported. When codes are active, the broadcast payload shall include a \texttt{dtcs} array; when cleared, the key shall be omitted so that existing consumers remain unaffected. The Android application shall decode codes with symptom explanations and severity ratings, and shall support automatic or manual creation of digital service tickets stamped with vehicle VIN, mileage, and fault description, with dispatch integration to service partners or Telegram notifications. \par
 
 \subsection{GPS Route Integration}
-The system shall support GPS-enriched datasets in which latitude, longitude, elevation, bearing, GPS speed, and fix status are pre-merged with OBD rows. When such a dataset is loaded, every streamed tick shall include the GPS fields, and the system shall expose a full-route polyline endpoint (\texttt{/api/route}) and a trip summary endpoint (\texttt{/api/trip-summary}) returning distance, average and maximum speed, and average RPM and throttle. Datasets without GPS shall continue to function identically, with GPS endpoints returning a clear not-found response so that frontends can gracefully degrade. \par
+The system shall acquire GPS position, elevation, bearing, and speed directly from the Android device's onboard GPS sensor in real time, and shall fuse each GPS sample with the concurrently streamed OBD-II tick using timestamp alignment. Every streamed tick shall include the GPS fields, and the system shall expose a full-route polyline endpoint (\texttt{/api/route}) and a trip summary endpoint (\texttt{/api/trip-summary}) returning distance, average and maximum speed, and average RPM and throttle. Sessions without a valid GPS fix shall continue to function identically, with GPS endpoints returning a clear not-found response so that frontends can gracefully degrade. \par
 
 \subsection{Alert Engine and Voice Alerts}
 The system shall provide a prioritized alert banner with severity tags (CRITICAL, WARNING, INFO) for overspeeding, engine overheating (coolant above 100\,\textdegree{}C), cold-engine revving (coolant below 60\,\textdegree{}C at more than 3500 RPM), and detected sensor anomalies. The Android application shall additionally provide spoken alerts using the Android Text-to-Speech engine, with customizable cooldown debounce and independent toggles for speed, temperature, and anomaly announcements. \par
@@ -434,19 +431,19 @@ The Android application shall track trips on an interactive map with switchable 
 This section specifies the non-functional attributes of AutoVue. These requirements define quality standards and operational expectations for the system as deployed.
 
 \subsection{Reliability}
-The backend service shall remain stable under continuous simulator playback, and WebSocket clients shall tolerate transient network interruptions by falling back to REST polling and resuming the stream automatically. Unsupported or missing sensor fields in uploaded datasets shall be handled gracefully with default values rather than functional failure. \par
+The backend service shall remain stable under continuous live telemetry acquisition from the vehicle ECU, and WebSocket clients shall tolerate transient network interruptions by falling back to REST polling and resuming the stream automatically. Unsupported or missing sensor fields reported by the adapter shall be handled gracefully with default values rather than functional failure. \par
 
 \subsection{Availability}
 The backend shall be deployable as a single containerized service on free-tier cloud hosting, with a health-check endpoint (\texttt{/health}) used by the hosting platform to detect a live instance. The Android application shall continue to render its last known state and degrade to REST polling when the live stream is unavailable. \par
 
 \subsection{Scalability}
-The simulator shall support adjustable playback speed up to 10x and a configurable history ring buffer (default 500 ticks) to bound memory use. The WebSocket layer shall support multiple concurrently connected clients receiving the same broadcast ticks. \par
+The system shall maintain a configurable history ring buffer (default 500 ticks) to bound memory use, sized to the ECU's live polling rate. The WebSocket layer shall support multiple concurrently connected clients receiving the same broadcast ticks. \par
 
 \subsection{Security}
 All streamed telemetry shall be transported over secure WebSocket (\texttt{wss://}) and HTTPS in deployment. The platform is currently a single-user academic prototype and does not implement authentication; user accounts, JWT-based access control, and bcrypt credential storage are identified as future extensions. \par
 
 \subsection{Maintainability}
-The backend shall follow a modular package layout separating machine learning code, simulator services, and API routes, so that individual components — such as the anomaly detector or the fuel estimator — can be independently retrained, replaced, or extended. The standard ten-field sensor contract shall be the single interface between datasets, simulator, ML models, and clients, so that datasets or acquisition hardware can be swapped without touching downstream code. \par
+The backend shall follow a modular package layout separating machine learning code, ECU acquisition services, and API routes, so that individual components — such as the anomaly detector or the fuel estimator — can be independently retrained, replaced, or extended. The standard ten-field sensor contract shall be the single interface between the OBD-II adapter, ML models, and clients, so that acquisition hardware can be swapped without touching downstream code. \par
 
 \subsection{Portability}
 The Android application shall run on devices with Android API levels up to target SDK 34, and its layout engine shall adapt defensively across phone aspect ratios and screen densities. The backend shall be deployable on any platform supporting Python 3.11 and Docker without code changes. \par
@@ -455,7 +452,7 @@ The Android application shall run on devices with Android API levels up to targe
 A first-time user shall be able to install the Android application, complete the two-page profile wizard, connect to the telemetry stream using the OBD Link control, and view live instrumentation within minutes using only on-screen guidance. \par
 
 \section{User Interface requirements}
-This section describes the logical design and behavioural specification of the user-facing interfaces of AutoVue. The primary user interface is the native Android cockpit application; a browser-based control dashboard ships with the backend for simulator administration.
+This section describes the logical design and behavioural specification of the user-facing interfaces of AutoVue. The primary user interface is the native Android cockpit application; a browser-based control dashboard ships with the backend for live acquisition administration.
 
 \subsection{Instrument Cluster (Cockpit)}
 The primary screen shall be a dual analog-digital instrument cluster rendering a custom canvas-drawn analog speedometer with dynamic sweep needle, a tachometer with an RPM redline threshold, a coolant temperature gauge with cold and overheat zones, and a fuel percentage meter. Instantaneous power (HP) and engine torque (Nm) shall be computed and plotted against peak power and torque RPM curves. A trip computer HUD shall display elapsed trip time, distance, fuel cost, instantaneous and average consumption (L/100km), instantaneous speed, and an eco-driving score. \par
@@ -475,15 +472,15 @@ An alert banner shall display prioritized notifications with severity tags and s
 \subsection{Trip Map, Refuelling, and Start-Stop Views}
 A GPS map view shall replay the route with switchable overlays (speed heatmap, driving behaviour, fuel efficiency). A refuelling diary shall log quantity, price, cost, and odometer per stop, with low-fuel awareness below 50\,km of estimated range. A start-stop view shall show engine shut-off versus stationary time with cumulative fuel and cost savings. \par
 
-\subsection{Simulator Control Dashboard (Web)}
-The backend shall serve a single-file browser dashboard for administering the simulator: listing and switching datasets, controlling playback (start/pause/resume/stop/speed/loop), viewing live values, and operating the sensor override dials. \par
+\subsection{OBD Adapter Diagnostics Dashboard (Web)}
+The backend shall serve a single-file browser dashboard for monitoring live acquisition: adapter connection status, active protocol, live sensor values, and acquisition session controls (start/pause/resume/stop). \par
 
 \section{Software Requirements }
 \subsection{Programming Language}
-The backend shall be developed in Python 3.11, serving as the language for simulator services, machine learning inference, and the API layer. The Android application shall be developed in Kotlin. \par
+The backend shall be developed in Python 3.11, serving as the language for acquisition services, machine learning inference, and the API layer. The Android application shall be developed in Kotlin. \par
 
 \subsection{Backend API Framework}
-The backend shall be implemented using FastAPI (0.111) with Uvicorn, exposing REST endpoints for machine learning inference, dataset management, playback control, override dials, DTC management, GPS route data, and history retrieval, together with WebSocket endpoints for live telemetry and simulator logs. \par
+The backend shall be implemented using FastAPI (0.111) with Uvicorn, exposing REST endpoints for machine learning inference, adapter connection control, DTC management, GPS route data, and history retrieval, together with WebSocket endpoints for live telemetry and acquisition logs. \par
 
 \subsection{Machine Learning Frameworks}
 The system shall employ XGBoost 2.0 for driver behaviour classification, PyTorch 2.2 for the LSTM Autoencoder health model, and Scikit-learn for feature scaling and threshold management. The fuel estimation module shall be physics-based and require no training. Model artefacts (pickled scalers, thresholds, model weights, and metadata) shall be version-controlled files loaded at startup. \par
@@ -498,17 +495,17 @@ The application shall be built with Jetpack Compose using Material Design 3, Kot
 The application shall use the Android Text-to-Speech engine for spoken driver alerts. \par
 
 \subsection{Data Processing Libraries}
-The backend shall use NumPy and Pandas for dataset loading, cleaning, missing-value reporting, and rolling-window feature extraction. \par
+The backend shall use NumPy and Pandas for telemetry cleaning, missing-value handling, and rolling-window feature extraction. \par
 
 \subsection{Version Control and Development Environment}
 Source code shall be managed with Git and hosted on GitHub. Machine learning experimentation shall be conducted in Jupyter Notebook, and the Android application developed in Android Studio. \par
 
 \subsection{Containerization and Deployment}
-The backend shall ship with a Dockerfile enabling single-container deployment to cloud platforms such as Render, with environment-variable-based configuration for simulator settings. \par
+The backend shall ship with a Dockerfile enabling single-container deployment to cloud platforms such as Render, with environment-variable-based configuration for acquisition settings. \par
 
 \section{Hardware Requirements }
 \subsection{OBD-II Data Source}
-The primary validation environment is the integrated dataset simulator, which requires no vehicle hardware. The architecture shall retain a clean seam (a tick-producing service behind the standard field contract) so that an ELM327-compatible ISO 15765-4 CAN adapter using the python-OBD library can be introduced as an alternative data source without changes to downstream components. \par
+The primary data source shall be an ELM327-compatible OBD-II adapter connected to the vehicle's diagnostic port and paired with the Android device over Bluetooth. The backend shall acquire live telemetry from this adapter using the python-OBD library over the standard ISO 15765-4 CAN protocol, feeding the same standard field contract consumed by the ML models, API layer, and Android application. \par
 
 \subsection{Android Device}
 The Android cockpit application shall target devices running Android with support for API level 34, requiring network connectivity (Wi-Fi or cellular) to reach the backend service. \par
@@ -518,17 +515,17 @@ The backend shall be deployable on any host capable of running the container, in
 
 \section{Performance Requirements}
 
-\subsection{Playback and Streaming Rate}
-The simulator shall emit one telemetry tick per second at 1x speed and sustain the selected playback speed up to 10x. Each WebSocket tick shall carry raw sensor data and, once the rolling ML buffer has filled (approximately the first 30 ticks), the inference results of all three models in a single push. \par
+\subsection{Live Telemetry Polling Rate}
+The system shall poll the ECU via the OBD-II adapter at a sustained rate of approximately one telemetry tick per second across the standard sensor set. \par
 
 \subsection{Machine Learning Inference Latency}
 Inference shall complete within the one-second tick interval for all three models: fuel estimation activates from tick 20, health anomaly detection from tick 24, and driver behaviour classification from tick 30, with results attached to every subsequent tick. \par
 
 \subsection{API Responsiveness}
-REST endpoints for live data, history, playback control, and ML prediction shall respond interactively (sub-second under nominal load) so that the control dashboard and Android fallback polling remain fluid. \par
+REST endpoints for live data, history, acquisition control, and ML prediction shall respond interactively (sub-second under nominal load) so that the control dashboard and Android fallback polling remain fluid. \par
 
 \subsection{Resource Bounds}
-The history ring buffer shall be capped (default 500 entries) to bound memory consumption, and dataset loading shall report row counts, durations, and missing-value statistics so that oversized or malformed uploads are visible to the operator. \par
+The history ring buffer shall be capped (default 500 entries) to bound memory consumption, and the live acquisition session shall report tick counts, session duration, and any missing-value or dropped-tick statistics so that data quality issues are visible to the operator. \par
 
 \section{Design Constraints}
 
@@ -536,27 +533,15 @@ The history ring buffer shall be capped (default 500 entries) to bound memory co
 The system is constrained to the standard OBD-II Mode 01 parameter set for real-time telemetry and standard DTC domains (P, C, B, U). Manufacturer-specific extended PIDs shall not be relied upon for core functionality. \par
 
 \subsection{Standard Sensor Field Contract}
-All telemetry — from the simulator, the WebSocket stream, REST endpoints, and history- shall use one fixed set of 10 Standard field names.This contract is the stability boundary that allows datasets,acquisition hardware and ML code to evolve independently.\par
+All telemetry — from the OBD-II adapter, the WebSocket stream, REST endpoints, and history — shall use one fixed set of 10 Standard field names. This contract is the stability boundary that allows acquisition hardware and ML code to evolve independently.\par
 
 \subsection{Read-Only ECU Access}
-The system shall operate strictly in read-only fashion with respect to the vehicle.In the simulator ,this constraint is inherent; when a physical adapter is later attached, the system must not issue ECU-modifying commandsor clear codes without explicit user confirmation. \par
+The system shall operate strictly in read-only fashion with respect to the vehicle. The system shall not issue ECU-modifying commands or clear diagnostic codes on the vehicle without explicit user confirmation. \par
 \subsection{Internet Dependency}
-Full functionality — live streaming, ML inference, and route data — depends on connectivity between the Android application and the hosted backend. The application shall degrade to REST polling and retain its last known state during interruptions. \par
+Full functionality - live streaming, ML inference, and route data - depends on connectivity between the Android application and the hosted backend. The application shall degrade to REST polling and retain its last known state during interruptions. \par
 
 \subsection{Deployment Environment Constraints}
-On free-tier hosting, the filesystem is not persistent across redeploys; therefore user-uploaded datasets shall be treated as ephemeral while bundled datasets shall ship with the container image. Cold-start wake-up latency shall be accounted for in live demonstrations. \par
-
-\section{Logging Requirements}
-
-\subsection{Structured Application Logging}
-The backend shall emit structured logs for dataset loading, playback lifecycle events, override dial changes, DTC changes, and errors, with standard severity levels. \par
-
-\subsection{Live Log Stream}
-Simulator log events shall be broadcast over a dedicated WebSocket channel (\texttt{/api/ws/logs}) so that connected dashboards observe dataset loads, streaming start/pause/stop, warnings, and errors as they happen, with a REST status endpoint serving as a polling backstop. \par
-
-\subsection{Playback Audit Trail}
-Each broadcast tick shall carry its row index, elapsed playback time, and completion percentage, providing a complete audit trail of what was streamed and when. \par
-
+On free-tier hosting, the filesystem is not persistent across redeploys. Cold-start wake-up latency shall be accounted for in live demonstrations. \par
 
 %---------------------------- Chapter FOUR --------------------------
 
@@ -564,7 +549,7 @@ Each broadcast tick shall carry its row index, elapsed playback time, and comple
 \section{Abstract Design}
 \subsection{Architectural diagram}
 The AutoVue architecture follows a layered design pattern comprising four distinct tiers:
-Data Source, Backend Service (ML API + Simulator), Transport, and Clients. Each tier has a clearly defined responsibility and communicates through well-specified interfaces. The backend is a single deployable FastAPI process in which the simulator imports the three machine learning inference functions and runs them automatically on a rolling buffer of ticks, attaching results to every broadcast. This separation of concerns enables independent testing, replacement, and scaling of individual components, and guarantees that the Android client, the control dashboard, and all ML code depend only on the fixed ten-field sensor contract.
+Data Source, Backend Service (ML API + Data Acquisition), Transport, and Clients. Each tier has a clearly defined responsibility and communicates through well-specified interfaces. The backend is a single deployable FastAPI process that receives real-time vehicle data via Bluetooth directly from the car's ECU or OBD-II adapter. It runs the three machine learning inference functions automatically on a rolling buffer of incoming ticks, attaching results to every broadcast. This separation of concerns enables independent testing, replacement, and scaling of individual components, and guarantees that the Android client and all ML code depend only on the fixed ten-field sensor contract.
 
 The AutoVue system follows a multi-layer architecture:
 
@@ -576,16 +561,16 @@ The AutoVue system follows a multi-layer architecture:
 \textbf{Layer} & \textbf{Technology Stack} & \textbf{Responsibility} \\
 \hline
 
-Data Source Layer & Recorded OBD-II datasets (CSV/XLSX), GPS-enriched datasets & Row-by-row playback of real driving sessions; bundled normal and anomaly datasets with upload/switch support \\
+Data Source Layer & OBD-II Bluetooth Adapter, ECU & Real-time acquisition of live driving sessions directly from the vehicle's onboard diagnostics port \\
 \hline
 
-Backend Service Layer & Python 3.11, FastAPI, Dataset Manager, Playback Engine & Tick building, rolling ML buffer, XGBoost / LSTM Autoencoder / physics-fuel inference, override-dial merging, DTC state, GPS route data \\
+Backend Service Layer & Python 3.11, FastAPI, Bluetooth Data Gateway & Tick building, rolling ML buffer, XGBoost / LSTM Autoencoder / physics-fuel inference, DTC state, GPS route data \\
 \hline
 
-Transport Layer & WebSocket (\texttt{/api/ws/live}, \texttt{/api/ws/logs}), REST API, HTTPS/WSS & Real-time broadcast of sensor + ML ticks, snapshot/history polling, playback and dial control \\
+Transport Layer & WebSocket (\texttt{/api/ws/live}, \texttt{/api/ws/logs}), REST API, HTTPS/WSS & Real-time broadcast of sensor + ML ticks, snapshot/history polling \\
 \hline
 
-Client Layer & Android app (Jetpack Compose, MVVM), browser control dashboard & Driver-facing cockpit, oscilloscope, alerts/TTS, trip maps, service tickets; operator-facing simulator controls and rotary dials \\
+Client Layer & Android app (Jetpack Compose, MVVM) & Driver-facing cockpit, oscilloscope, alerts/TTS, trip maps, service tickets \\
 \hline
 
 \end{tabular}
@@ -597,25 +582,24 @@ Client Layer & Android app (Jetpack Compose, MVVM), browser control dashboard & 
 \renewcommand{\arraystretch}{1.0}
 \begin{tabular}{c}
   \fbox{\parbox{9cm}{\centering\textbf{Data Source Layer}\\[3pt]
-        OBD-II datasets (CSV/XLSX), GPS-enriched datasets}}\\[6pt]
+        OBD-II Bluetooth Adapter, Vehicle ECU}}\\[6pt]
   {\Large$\Downarrow$}\\[6pt]
   \fbox{\parbox{9cm}{\centering\textbf{Backend Service Layer}\\[3pt]
-        Python 3.11, FastAPI, Dataset Manager, Playback Engine,\\
+        Python 3.11, FastAPI, Bluetooth Data Gateway,\\
         XGBoost / LSTM Autoencoder / Physics-Fuel Inference}}\\[6pt]
   {\Large$\Downarrow$}\\[6pt]
   \fbox{\parbox{9cm}{\centering\textbf{Transport Layer}\\[3pt]
         WebSocket (\texttt{/api/ws/live}, \texttt{/api/ws/logs}), REST API, HTTPS/WSS}}\\[6pt]
   {\Large$\Downarrow$}\\[6pt]
   \fbox{\parbox{9cm}{\centering\textbf{Client Layer}\\[3pt]
-        Android app (Jetpack Compose, MVVM),\\
-        Browser control dashboard}}\\
+        Android app (Jetpack Compose, MVVM)}}\\
 \end{tabular}
 \caption{System Architecture Diagram}
 \label{arch}
 \end{figure}
 \subsection{Use Case Diagram}
 
-The Use Case Diagram identifies the actors interacting with AutoVue and the functional capabilities they access. Figure~\ref{usecase} illustrates the interactions between the driver and the system, including profile onboarding, live cockpit monitoring, ML insight viewing, and DTC/service-ticket management, together with the operator's simulator administration.
+The Use Case Diagram identifies the actors interacting with AutoVue and the functional capabilities they access. Figure~\ref{usecase} illustrates the interactions between the driver and the system, including profile onboarding, live cockpit monitoring, ML insight viewing, and DTC/service-ticket management.
 
 \begin{figure}[H]
 \centering
@@ -662,12 +646,12 @@ thresholds\\
 \textit{Output:} Anomaly flag + per-feature errors\newline
 + triggered features
 &
-\textbf{MODULE 4: OBD-II Simulator \& Streaming}\\[4pt]
-\textit{Input:} Dataset rows, playback controls,\newline
-sensor overrides, DTC codes\\
-\textit{Algorithm:} Playback engine + tick builder\newline
+\textbf{MODULE 4: OBD-II Data Acquisition \& Streaming}\\[4pt]
+\textit{Input:} Live Bluetooth data stream,\newline
+DTC codes\\
+\textit{Algorithm:} Bluetooth gateway + tick builder\newline
 + rolling ML buffer\\
-\textit{Output:} WS/REST ticks with merged data\newline
+\textit{Output:} WS/REST ticks with live data\newline
 + \texttt{ml} + \texttt{dtcs} + GPS
 \\ \hline
 \end{tabular}
@@ -683,7 +667,7 @@ sensor overrides, DTC codes\\
 \hline
 
 Driver Behaviour Profiling &
-Rolling RPM/VSS/Throttle buffer from playback engine &
+Rolling RPM/VSS/Throttle buffer from live data stream &
 Client ML panel, TTS coaching, behaviour map overlay &
 Every tick (from tick 30) \\
 \hline
@@ -700,10 +684,10 @@ Client health panel, CRITICAL alert engine &
 Every tick (from tick 24) \\
 \hline
 
-Simulator \& Streaming &
-Dataset manager, dial overrides, DTC state, GPS columns &
+Data Acquisition \& Streaming &
+Bluetooth gateway, DTC state, live GPS hardware &
 All clients via WebSocket broadcast; history ring buffer &
-Every $\sim$1 second (per speed multiplier) \\
+Every $\sim$1 second (real-time stream) \\
 \hline
 
 \end{tabular}
@@ -728,7 +712,7 @@ Sequence diagrams depict the time-ordered interaction between system components 
 \caption{Sequence 3: Rolling-Buffer ML Inference and Anomaly Alert}
 \end{figure}
 \subsection{Class diagram}
-The class diagram models the core domain entities and their relationships within the AutoVue backend and Android application. Classes are organized into three packages: Simulator Services, ML Components, and the Android client (ViewModels, repositories, and UI state).
+The class diagram models the core domain entities and their relationships within the AutoVue backend and Android application. Classes are organized into three packages: Data Acquisition Services, ML Components, and the Android client (ViewModels, repositories, and UI state).
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.6\textwidth]{mermaid-diagram.png}
@@ -743,7 +727,7 @@ The class diagram models the core domain entities and their relationships within
 
 \section{Control Flow Diagram}
 
-The system processes vehicle data in a sequential flow. A dataset row is read by the playback engine, merged with any active sensor overrides and DTC/GPS state, pushed into the rolling ML buffer, passed through the three inference functions, and broadcast to clients over WebSocket, while the Android client renders instrumentation and raises alerts.
+The system processes vehicle data in a sequential flow. Live data is acquired directly from the ECU via Bluetooth, merged with DTC/GPS state, pushed into the rolling ML buffer, passed through the three inference functions, and broadcast to clients over WebSocket, while the Android client renders instrumentation and raises alerts.
 \begin{figure}[H]
 \centering
 \includegraphics[width=1\textwidth]{control1.png}
