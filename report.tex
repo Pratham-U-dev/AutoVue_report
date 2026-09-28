@@ -626,31 +626,31 @@ The Use Case Diagram identifies the actors interacting with AutoVue and the func
 \renewcommand{\arraystretch}{1.4}
 \begin{tabular}{|p{6.8cm}|p{6.8cm}|}
 \hline
-\textbf{MODULE 1: Driver Behaviour Profiling}\\[4pt]
-\textit{Input:} RPM, VSS, Throttle windows\\
-\textit{Algorithm:} XGBoost (9 engineered features)\\
+\textbf{MODULE 1: Driver Behaviour Profiling}\newline
+\textit{Input:} RPM, VSS, Throttle windows\newline
+\textit{Algorithm:} XGBoost (9 engineered features)\newline
 \textit{Output:} Economical / Moderate / Aggressive\newline
 + confidence + coaching message
 &
-\textbf{MODULE 2: Physics-Based Fuel Estimation}\\[4pt]
+\textbf{MODULE 2: Physics-Based Fuel Estimation}\newline
 \textit{Input:} RPM, VSS, MAF, MAP, IAT, Throttle\newline
-(20-tick window)\\
+(20-tick window)\newline
 \textit{Algorithm:} 3-tier MAF $\rightarrow$ speed-density\newline
-$\rightarrow$ throttle heuristic\\
+$\rightarrow$ throttle heuristic\newline
 \textit{Output:} FCR (g/s), mileage (km/L), tier used
 \\ \hline
-\textbf{MODULE 3: Vehicle Health Anomaly Detection}\\[4pt]
-\textit{Input:} 24 ticks $\times$ 10 sensor features\\
+\textbf{MODULE 3: Vehicle Health Anomaly Detection}\newline
+\textit{Input:} 24 ticks $\times$ 10 sensor features\newline
 \textit{Algorithm:} LSTM Autoencoder + per-feature\newline
-thresholds\\
+thresholds\newline
 \textit{Output:} Anomaly flag + per-feature errors\newline
 + triggered features
 &
-\textbf{MODULE 4: OBD-II Data Acquisition \& Streaming}\\[4pt]
+\textbf{MODULE 4: OBD-II Data Acquisition \& Streaming}\newline
 \textit{Input:} Live Bluetooth data stream,\newline
-DTC codes\\
+DTC codes\newline
 \textit{Algorithm:} Bluetooth gateway + tick builder\newline
-+ rolling ML buffer\\
++ rolling ML buffer\newline
 \textit{Output:} WS/REST ticks with live data\newline
 + \texttt{ml} + \texttt{dtcs} + GPS
 \\ \hline
@@ -734,31 +734,31 @@ The system processes vehicle data in a sequential flow. Live data is acquired di
 \caption{Complete System Flow diagram}
 \end{figure}
 
-\subsection{Algorithms for Logic Implementation}
+% \subsection{Algorithms for Logic Implementation}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=1\textwidth]{alg1.png}
-\caption{Algorithm 1: Three-Tier Physics Fuel Estimation}
-\end{figure}
+% \begin{figure}[H]
+% \centering
+% \includegraphics[width=1\textwidth]{alg1.png}
+% \caption{Algorithm 1: Three-Tier Physics Fuel Estimation}
+% \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=1\textwidth]{alg2.png}
-\caption{Algorithm 2: XGBoost Driver Behaviour Feature Extraction and Classification}
-\end{figure}
+% \begin{figure}[H]
+% \centering
+% \includegraphics[width=1\textwidth]{alg2.png}
+% \caption{Algorithm 2: XGBoost Driver Behaviour Feature Extraction and Classification}
+% \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=1\textwidth]{alg3.png}
-\caption{Algorithm 3: LSTM Autoencoder Health Anomaly Detection}
-\end{figure}
+% \begin{figure}[H]
+% \centering
+% \includegraphics[width=1\textwidth]{alg3.png}
+% \caption{Algorithm 3: LSTM Autoencoder Health Anomaly Detection}
+% \end{figure}
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=1\textwidth]{alg4.png}
-\caption{Algorithm 4: Sensor Override Tick Merging and Release}
-\end{figure}
+% \begin{figure}[H]
+% \centering
+% \includegraphics[width=1\textwidth]{alg4.png}
+% \caption{Algorithm 4: Sensor Override Tick Merging and Release}
+% \end{figure}
 
 \subsection{Activity Diagram for Use Cases}
 
@@ -773,54 +773,6 @@ The system processes vehicle data in a sequential flow. Live data is acquired di
 \caption{Rolling-Buffer ML Health Monitoring Pipeline}
 \end{figure}
 
-
-\section{Data Layer Design}
-The system deliberately uses a file-and-memory data layer rather than a relational database, which keeps the single-container deployment self-contained and free-tier friendly. Persistent state consists of bundled and uploaded dataset files and version-controlled model artefacts; runtime state consists of bounded in-memory buffers.
-
-\subsection{Persistent Storage Layout}
-\begin{table}[H]
-\centering
-\renewcommand{\arraystretch}{1.3}
-\begin{tabular}{|p{4cm}|p{9.5cm}|}
-\hline
-\textbf{Location} & \textbf{Contents} \\
-\hline
-\texttt{datasets/} & Bundled sample OBD-II datasets (normal and anomaly sessions), including GPS-enriched variants produced by the merge script \\
-\hline
-\texttt{uploads/} & User-uploaded CSV/XLSX datasets; ephemeral on free-tier hosting \\
-\hline
-\texttt{models/} & Trained artefacts: \texttt{driver\_model.pkl}, \texttt{driver\_scaler.pkl}, \texttt{driver\_metadata.json}, \texttt{lstm\_autoencoder.pt}, \texttt{health\_scaler.pkl}, \texttt{health\_model\_config.pkl}, \texttt{optimized\_thresholds.pkl}, plus archived fuel-model files \\
-\hline
-\end{tabular}
-\caption{Persistent Data Layout}
-\label{tab:data_layout}
-\end{table}
-
-\subsection{Runtime State Management}
-\begin{table}[H]
-\centering
-\renewcommand{\arraystretch}{1.3}
-\begin{tabular}{|p{4.5cm}|p{3cm}|p{5.5cm}|}
-\hline
-\textbf{State Structure} & \textbf{Capacity} & \textbf{Purpose} \\
-\hline
-History ring buffer & 500 ticks & Serves \texttt{/api/history} for chart backfill \\
-\hline
-Rolling ML buffer & $\geq$30 ticks & Feeds fuel (20), health (24), and driver (30) windows \\
-\hline
-Playback state & 1 instance & Row index, speed multiplier, loop flag, dataset reference \\
-\hline
-Override map & 10 fields & Active sensor-override dials with per-field release \\
-\hline
-DTC list & unbounded & Active fault codes merged into ticks \\
-\hline
-\end{tabular}
-\caption{Runtime State Structures}
-\label{tab:runtime_state}
-\end{table}
-
-\par
-Vehicle profile data, refuelling diary entries, service tickets, and start-stop statistics are maintained client-side on the Android device within the application's local profile store, keeping the backend stateless with respect to user data.
 
 %---------------------------- Chapter FIVE --------------------------
 
