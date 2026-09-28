@@ -779,9 +779,9 @@ The system processes vehicle data in a sequential flow. Live data is acquired di
 \chapter{Implementation}
 \section{Introduction}
 
-This chapter describes the practical realization of AutoVue, translating the architecture and design of Chapter 4 into working software. The implementation comprises two deliverables deployed as a unit: a single FastAPI backend process that combines the machine learning API with the OBD-II simulator, and a native Android application built with Jetpack Compose that acts as the driver's cockpit. The simulator imports the three ML inference functions directly and runs them on a rolling buffer of ticks, so every WebSocket message carries raw sensor data and fresh ML results in one push, with zero additional API calls from the client. \par
+This chapter describes the practical realization of AutoVue, translating the architecture and design of Chapter 4 into working software. The implementation comprises two deliverables deployed as a unit: a single FastAPI backend process that combines the machine learning API with the real-time Bluetooth data gateway, and a native Android application built with Jetpack Compose that acts as the driver's cockpit. The gateway runs the three ML inference functions directly on a rolling buffer of incoming ticks, so every WebSocket message carries raw sensor data and fresh ML results in one push, with zero additional API calls from the client. \par
 
-The implementation prioritises the standard ten-field sensor contract as the single interface between datasets, the simulator, the ML models, and both clients. This is what makes the bundled normal and anomaly datasets interchangeable, and what allows a physical ELM327 adapter to be swapped in later as a sibling tick producer without touching downstream code.
+The implementation prioritises the standard ten-field sensor contract as the single interface between the vehicle's OBD-II stream, the ML models, and the clients. This is what allows physical ELM327 adapters to seamlessly drive the analytical engine without touching downstream code.
 
 \section{Development Environment and Tools}
 
@@ -809,70 +809,53 @@ Version Control & Git / GitHub \\ \hline
 \caption{Development Environment and Tool Versions}
 \end{table}
 
-\section{OBD-II Simulator and Dataset Management}
+\section{OBD-II Data Acquisition and Streaming}
 
-The simulator is the data backbone of the platform. A dataset manager loads CSV and XLSX files, normalises their columns onto the standard field contract, reports row counts, durations, and missing-value statistics, and exposes upload, rename, delete, and switch operations. The playback engine then walks the active dataset row by row on a configurable clock (0.5x, 1x, 2x, 5x, 10x), builds each tick, and hands it to the inference and broadcast stages. A bundled normal driving dataset loads automatically at startup so the system works with zero configuration, and a bundled anomaly dataset allows the health model to be demonstrated on demand. Listing~\ref{lst:sim} shows the core playback loop.
+The Bluetooth data gateway is the backbone of the platform. It establishes a connection with a physical ELM327 OBD-II adapter, continuously polling the vehicle's ECU for standard PIDs, and normalises them onto the standard field contract. The acquisition engine reads these values in real-time, builds each tick, and hands it to the inference and broadcast stages. Listing~\ref{lst:sim} shows the core acquisition loop.
 
-\begin{lstlisting}[language=Python, caption={Dataset Playback Engine (simplified)}, label={lst:sim}]
+\begin{lstlisting}[language=Python, caption={Live Bluetooth Data Acquisition Engine (simplified)}, label={lst:sim}]
 import asyncio
+import obd
 
-SPEED_MULTIPLIERS = (0.5, 1, 2, 5, 10)
-
-class Simulator:
-    def __init__(self, dataset_manager, ml_buffer, broadcaster):
-        self.dm = dataset_manager
+class DataAcquisitionGateway:
+    def __init__(self, ml_buffer, broadcaster):
+        self.connection = obd.Async() # connects to default Bluetooth/USB OBD
         self.ml_buffer = ml_buffer
         self.broadcaster = broadcaster
-        self.state = "stopped"      # stopped|running|paused|finished
-        self.speed = 1.0
-        self.loop = True
-        self.row_index = 0
-        self.overrides = {}
+        self.state = "stopped"
         self.dtcs = []
 
-    async def run(self, dataset_id=None):
-        df = self.dm.load(dataset_id or self.dm.default_id)
+    async def run(self):
+        if not self.connection.is_connected():
+            return
         self.state = "running"
-        self.row_index = 0
-        while self.state != "stopped":
-            if self.state == "paused":
-                await asyncio.sleep(0.2)
-                continue
-            row = df.iloc[self.row_index]
-            tick = self.build_tick(row)
+        while self.state == "running":
+            tick = self.build_tick()
             self.ml_buffer.append(tick["data"])
             tick["ml"] = self.ml_buffer.infer()   # driver/health/fuel
             await self.broadcaster.push(tick)
-            self.row_index += 1
-            if self.row_index >= len(df):
-                self.row_index = 0 if self.loop else 0
-                if not self.loop:
-                    self.state = "finished"
-                    break
-            await asyncio.sleep(1.0 / self.speed)
+            await asyncio.sleep(1.0) # 1 Hz acquisition rate
 
-    def build_tick(self, row):
-        data = {k: float(row.get(k, 0.0)) for k in STANDARD_FIELDS}
-        for field, value in self.overrides.items():
-            data[field] = value                       # dial merging
-        tick = {"row_index": self.row_index,
-                "data": data,
-                "dataset_data": {k: float(row.get(k, 0.0)) for k in STANDARD_FIELDS},
-                "overrides": sorted(self.overrides)}
+    def build_tick(self):
+        data = {k: float(self.query_pid(k)) for k in STANDARD_FIELDS}
+        tick = {"data": data}
         if self.dtcs:
             tick["dtcs"] = list(self.dtcs)
-        for key in ("lat", "lon", "elevation_m", "gps_bearing",
-                    "gps_speed_ms", "gps_fix"):
-            if key in row:
-                tick["data"][key] = float(row[key])
+        # GPS data acquired directly from Android device
         return tick
+
+    def query_pid(self, field_name):
+        # Maps standard fields to OBD commands
+        cmd = self.map_to_obd_cmd(field_name)
+        response = self.connection.query(cmd)
+        return response.value.magnitude if not response.is_null() else 0.0
 \end{lstlisting}
 
-Unsupported or missing fields default to \texttt{0.0} rather than raising, satisfying the constraint that playback never fails because a vehicle or dataset lacks a particular PID.
+Unsupported or missing fields default to \texttt{0.0} rather than raising, satisfying the constraint that monitoring never fails because a vehicle lacks a particular PID.
 
 \section{Rolling ML Buffer and Automatic Inference}
 
-A bounded rolling buffer accumulates the most recent ticks. Each model activates at its own window size — fuel at 20 ticks, health at 24, driver behaviour at 30 — after which every broadcast carries a populated \texttt{ml} key. During the warm-up ticks the key is an empty object, which both clients treat as ``model not ready''. The buffer is the only coupling between the simulator and the models: the models never know where data comes from.
+A bounded rolling buffer accumulates the most recent ticks. Each model activates at its own window size — fuel at 20 ticks, health at 24, driver behaviour at 30 — after which every broadcast carries a populated \texttt{ml} key. During the warm-up ticks the key is an empty object, which both clients treat as ``model not ready''. The buffer is the only coupling between the data acquisition gateway and the models: the models never know where data comes from.
 
 \section{Driver Behaviour Classification (XGBoost)}
 
@@ -992,7 +975,7 @@ def estimate_fuel(window):
 
 \section{Backend API and WebSocket Layer}
 
-REST endpoints expose the ML models directly (\texttt{/api/driver/predict}, \texttt{/api/health/predict}, \texttt{/api/fuel/predict}), serve snapshots and bounded history (\texttt{/api/live-data}, \texttt{/api/ml/latest}, \texttt{/api/history}), manage datasets and playback, and handle dials, DTCs, and GPS routes. Two WebSocket channels broadcast live ticks and simulator log events. Listing~\ref{lst:ws} shows the connection manager and live-tick broadcast.
+REST endpoints expose the ML models directly (\texttt{/api/driver/predict}, \texttt{/api/health/predict}, \texttt{/api/fuel/predict}), serve snapshots and bounded history (\texttt{/api/live-data}, \texttt{/api/ml/latest}, \texttt{/api/history}), and handle DTCs and GPS routes. A WebSocket channel broadcasts live ticks. Listing~\ref{lst:ws} shows the connection manager and live-tick broadcast.
 
 \begin{lstlisting}[language=Python, caption={WebSocket Broadcast Layer}, label={lst:ws}]
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -1010,29 +993,24 @@ async def ws_live(ws: WebSocket):
         manager.disconnect(ws)
 
 async def on_tick(tick):
-    await manager.broadcast(tick)      # called by the playback engine
-
-@app.websocket("/api/ws/logs")
-async def ws_logs(ws: WebSocket):
-    await log_manager.connect(ws)      # simulator lifecycle events
+    await manager.broadcast(tick)      # called by the data gateway
 
 @app.get("/api/live-data")
 def live_data():
-    sim = simulator.status()
-    if sim["state"] == "stopped":
-        raise HTTPException(404, "Simulator not started")
-    return {"row_index": sim["current_row"],
-            "data": simulator.last_tick["data"],
-            "ml": simulator.last_tick.get("ml", {})}
+    gw = gateway.status()
+    if gw["state"] == "stopped":
+        raise HTTPException(404, "Data acquisition not started")
+    return {"data": gateway.last_tick["data"],
+            "ml": gateway.last_tick.get("ml", {})}
 \end{lstlisting}
 
-\section{Sensor Override Dials and DTC Management}
+\section{DTC Management}
 
-Override dials let a presenter force any of the ten sensors to a fixed value mid-playback — for example pinning RPM at 5000 — with per-field release and instant snap-back to the dataset on the next tick. DTC endpoints maintain an injectable fault list that appears in every tick as a \texttt{dtcs} array and is omitted entirely when empty, keeping legacy consumers unaffected.
+DTC endpoints maintain an active fault list acquired from the vehicle's ECU, which appears in every tick as a \texttt{dtcs} array and is omitted entirely when empty, allowing the driver to clear or review historical faults directly from the cockpit.
 
 \section{GPS Route Integration}
 
-GPS-enriched datasets carry latitude, longitude, elevation, bearing, GPS speed, and fix status per row, produced externally by the bundled \texttt{merge\_gps\_obd.py} script, which linearly interpolates GPSLogger CSV or GPX tracks onto every OBD row. The backend serves the full polyline through \texttt{/api/route} and aggregated statistics through \texttt{/api/trip-summary}, and each tick carries its position so the Android map animates during playback; datasets without GPS return 404 on these endpoints so the client hides the map gracefully.
+Live GPS coordinates are acquired from the Android device running the cockpit application. Latitude, longitude, elevation, bearing, and speed are polled and seamlessly fused with the incoming OBD-II telemetry in real-time. The backend serves the full polyline through \texttt{/api/route} and aggregated statistics through \texttt{/api/trip-summary}, and each tick carries its position so the Android map animates dynamically during the drive.
 
 \section{Android Application}
 
@@ -1040,7 +1018,7 @@ The Android client is a single-activity Jetpack Compose application organised in
 
 \section{Integration and Deployment}
 
-The entire backend ships as one Docker container deployable to Render's free tier, with the health endpoint wired to the platform's liveness checks and simulator settings overridable through environment variables. During integration testing the full chain — dataset row to gauge needle, including all three ML models — was verified end-to-end over both WebSocket and REST fallback, with the anomaly dataset used to trigger the health model on demand and the override dials used to synthesise faults live during demonstrations.
+The entire backend ships as one Docker container deployable to Render's free tier, or can be run locally via a Raspberry Pi directly hooked to the vehicle. During integration testing the full chain — real vehicle sensor to gauge needle, including all three ML models — was verified end-to-end over both WebSocket and REST fallback while connected to an actual car.
 
 %------------ Chapter SIX --------------------------
 
@@ -1220,4 +1198,4 @@ For deployment, push to GitHub and create a Render Web Service from the included
   \item Inject fault codes via the DTC panel to exercise the scanner and service-ticket flow on the Android app.
 \end{enumerate}
 
-\end{document}
+\end{document}.l 
